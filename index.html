@@ -220,6 +220,12 @@
       transition: transform .2s ease, box-shadow .2s ease, filter .2s ease;
     }
 
+    .continue-button:disabled {
+      filter: grayscale(0.5) brightness(0.8);
+      cursor: not-allowed;
+      transform: none;
+    }
+
     .continue-button::before {
       content: "";
       position: absolute;
@@ -317,6 +323,10 @@
 
     .status.show {
       opacity: 1;
+    }
+
+    .status.error {
+      color: #ff4d4d;
     }
 
     .notice {
@@ -442,6 +452,12 @@
 
     <div class="divider"></div>
 
+    <!-- HONEYPOT FIELDS: Multiple hidden fields to catch bots -->
+    <input type="text" id="honeypot-website" name="website" style="display:none !important" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <input type="text" id="honeypot-email" name="email" style="display:none !important" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <input type="text" id="honeypot-phone" name="phone" style="display:none !important" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <input type="text" id="honeypot-username" name="username" style="display:none !important" tabindex="-1" autocomplete="off" aria-hidden="true">
+
     <button
       class="continue-button"
       id="continueButton"
@@ -474,22 +490,393 @@
     <div class="footer-mark">Protected Connection</div>
   </main>
 
+  <!-- Canvas untuk fingerprinting (tersembunyi) -->
+  <canvas id="fingerprintCanvas" style="display:none;" width="200" height="50"></canvas>
+
   <script>
-    // Ganti URL ini dengan halaman tujuan Anda.
     const TUJUAN_URL = "https://pafimalang.org/register?referral=jonathannn";
 
     const button = document.getElementById("continueButton");
     const statusMessage = document.getElementById("statusMessage");
+    const honeypots = [
+      document.getElementById("honeypot-website"),
+      document.getElementById("honeypot-email"),
+      document.getElementById("honeypot-phone"),
+      document.getElementById("honeypot-username")
+    ];
 
-    button.addEventListener("click", function () {
+    // === TRACKING VARIABLES ===
+    const pageLoadTime = Date.now();
+    const mouseMovements = [];
+    const keyPressTimes = [];
+    const touchEvents = [];
+    let hasMouseMovement = false;
+    let hasKeyboardInteraction = false;
+    let hasTouchInteraction = false;
+    let mouseEnterTime = null;
+
+    // === MOUSE TRACKING ===
+    document.addEventListener('mousemove', function(e) {
+      hasMouseMovement = true;
+      const now = Date.now();
+      mouseMovements.push({
+        x: e.clientX,
+        y: e.clientY,
+        time: now - pageLoadTime,
+        timestamp: now
+      });
+      
+      // Batasi array agar tidak terlalu besar
+      if (mouseMovements.length > 100) {
+        mouseMovements.shift();
+      }
+    });
+
+    // Track mouse enter pada button
+    button.addEventListener('mouseenter', function() {
+      mouseEnterTime = Date.now();
+    });
+
+    // === KEYBOARD TRACKING ===
+    document.addEventListener('keydown', function(e) {
+      hasKeyboardInteraction = true;
+      keyPressTimes.push(Date.now() - pageLoadTime);
+      
+      if (keyPressTimes.length > 50) {
+        keyPressTimes.shift();
+      }
+    });
+
+    // === TOUCH TRACKING ===
+    document.addEventListener('touchstart', function(e) {
+      hasTouchInteraction = true;
+      touchEvents.push({
+        time: Date.now() - pageLoadTime,
+        touches: e.touches.length
+      });
+      
+      if (touchEvents.length > 50) {
+        touchEvents.shift();
+      }
+    });
+
+    document.addEventListener('touchmove', function(e) {
+      hasTouchInteraction = true;
+    });
+
+    // === SCROLL TRACKING ===
+    let hasScrollInteraction = false;
+    document.addEventListener('scroll', function() {
+      hasScrollInteraction = true;
+    }, { passive: true });
+
+    // === CANVAS FINGERPRINTING ===
+    function getCanvasFingerprint() {
+      try {
+        const canvas = document.getElementById('fingerprintCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Render text dengan berbagai properti
+        ctx.textBaseline = 'top';
+        ctx.font = '14px Arial';
+        ctx.fillStyle = '#f60';
+        ctx.fillRect(0, 0, 100, 50);
+        ctx.fillStyle = '#069';
+        ctx.fillText('🔒 Security Check', 2, 15);
+        ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+        ctx.fillText('🔒 Security Check', 4, 17);
+        
+        // Dapatkan data pixel untuk fingerprint
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        
+        // Hitung hash sederhana
+        let hash = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          hash = ((hash << 5) - hash) + data[i] + data[i+1] + data[i+2];
+          hash = hash & hash;
+        }
+        
+        return hash.toString(16);
+      } catch (e) {
+        return 'error';
+      }
+    }
+
+    // === DETEKSI HEADLESS BROWSER ===
+    function detectHeadlessBrowser() {
+      const checks = {
+        // Cek webdriver
+        webdriver: navigator.webdriver === true,
+        
+        // Cek properties yang biasanya tidak ada di browser normal
+        phantom: typeof window._phantom !== 'undefined',
+        callPhantom: typeof window.callPhantom === 'function',
+        
+        // Cek apakah ini Selenium
+        selenium: (function() {
+          const drivers = ['__webdriver_evaluate', '__selenium_evaluate', '__fxdriver_evaluate',
+                          '__driver_unwrapped', '__webdriver_unwrapped', '__driver_evaluate',
+                          '__selenium_unwrapped', '__fxdriver_unwrapped'];
+          return drivers.some(prop => prop in document);
+        })(),
+        
+        // Cek apakah ini Puppeteer
+        puppeteer: (function() {
+          try {
+            return Object.keys(window).some(key => 
+              key.includes('puppeteer') || key.includes('devtools')
+            );
+          } catch (e) {
+            return false;
+          }
+        })(),
+        
+        // Cek console debug (headless browsers sering punya quirks)
+        chrome: navigator.userAgent.includes('Chrome') && 
+                !navigator.userAgent.includes('HeadlessChrome'),
+        
+        // Cek plugins (bot biasanya tidak punya plugins)
+        noPlugins: navigator.plugins.length === 0 && 
+                   navigator.userAgent.includes('Chrome'),
+        
+        // Cek languages (bot sering tidak set ini)
+        noLanguages: !navigator.languages || navigator.languages.length === 0,
+        
+        // Cek timezone
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone === 'UTC' &&
+                  navigator.userAgent.includes('Chrome'),
+      };
+      
+      // Hitung skor kecurigaan
+      const suspiciousCount = Object.values(checks).filter(v => v).length;
+      return {
+        checks,
+        isSuspicious: suspiciousCount >= 2,
+        score: suspiciousCount
+      };
+    }
+
+    // === ANALISIS POLA MOUSE ===
+    function analyzeMousePattern() {
+      if (mouseMovements.length < 3) {
+        return { isHuman: false, reason: 'Too few movements' };
+      }
+      
+      // Hitung variasi kecepatan (manusia punya variasi, bot linear)
+      const speeds = [];
+      for (let i = 1; i < mouseMovements.length; i++) {
+        const dx = mouseMovements[i].x - mouseMovements[i-1].x;
+        const dy = mouseMovements[i].y - mouseMovements[i-1].y;
+        const dt = mouseMovements[i].time - mouseMovements[i-1].time;
+        
+        if (dt > 0) {
+          speeds.push(Math.sqrt(dx*dx + dy*dy) / dt);
+        }
+      }
+      
+      if (speeds.length < 2) {
+        return { isHuman: false, reason: 'Cannot calculate speed variance' };
+      }
+      
+      // Hitung standar deviasi kecepatan
+      const avgSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+      const variance = speeds.reduce((a, b) => a + Math.pow(b - avgSpeed, 2), 0) / speeds.length;
+      const stdDev = Math.sqrt(variance);
+      
+      // Manusia punya variasi kecepatan yang signifikan
+      const hasNaturalVariation = stdDev > 0.5 || avgSpeed > 5;
+      
+      return {
+        isHuman: hasNaturalVariation,
+        avgSpeed,
+        stdDev,
+        reason: hasNaturalVariation ? 'Natural variation detected' : 'Too linear movement'
+      };
+    }
+
+    // === SCREEN/BROWSER CONSISTENCY CHECK ===
+    function checkScreenConsistency() {
+      const ua = navigator.userAgent.toLowerCase();
+      const isMobile = /mobile|android|iphone|ipad/i.test(ua);
+      const isTablet = /tablet|ipad/i.test(ua);
+      const isDesktop = !isMobile && !isTablet;
+      
+      const screenWidth = window.screen.width;
+      const screenHeight = window.screen.height;
+      const windowWidth = window.innerWidth;
+      const windowHeight = window.innerHeight;
+      
+      const issues = [];
+      
+      // Cek konsistensi resolusi
+      if (isDesktop && (screenWidth < 800 || screenHeight < 600)) {
+        issues.push('Unusual desktop resolution');
+      }
+      
+      if (isMobile && (screenWidth > 500 || screenHeight > 900)) {
+        issues.push('Resolution inconsistent with mobile UA');
+      }
+      
+      // Cek apakah window size masuk akal
+      if (windowWidth > screenWidth || windowHeight > screenHeight) {
+        issues.push('Window larger than screen');
+      }
+      
+      return {
+        isConsistent: issues.length === 0,
+        issues,
+        screen: { width: screenWidth, height: screenHeight },
+        window: { width: windowWidth, height: windowHeight }
+      };
+    }
+
+    // === FUNGSI DETEKSI BOT UTAMA ===
+    function isBot(event) {
+      const detectionResults = {
+        honeypot: false,
+        eventTrusted: true,
+        webdriver: false,
+        languages: true,
+        timing: true,
+        interaction: true,
+        headless: { isSuspicious: false, score: 0 },
+        mousePattern: { isHuman: true },
+        screenConsistency: { isConsistent: true },
+        canvas: true
+      };
+      
+      // 1. Cek Honeypot
+      const honeypotFilled = honeypots.some(hp => hp && hp.value !== "");
+      detectionResults.honeypot = honeypotFilled;
+      if (honeypotFilled) {
+        console.warn("🚨 Bot terdeteksi: Honeypot terisi.");
+        return { isBot: true, reason: 'honeypot', details: detectionResults };
+      }
+
+      // 2. Cek event trustworthiness
+      if (event && !event.isTrusted) {
+        detectionResults.eventTrusted = false;
+        console.warn("🚨 Bot terdeteksi: Klik tidak terpercaya (isTrusted=false).");
+        return { isBot: true, reason: 'untrusted_event', details: detectionResults };
+      }
+
+      // 3. Cek WebDriver
+      if (navigator.webdriver) {
+        detectionResults.webdriver = true;
+        console.warn("🚨 Bot terdeteksi: WebDriver aktif.");
+        return { isBot: true, reason: 'webdriver', details: detectionResults };
+      }
+
+      // 4. Cek bahasa browser
+      if (!navigator.languages || navigator.languages.length === 0) {
+        detectionResults.languages = false;
+        console.warn("🚨 Bot terdeteksi: Tidak ada preferensi bahasa.");
+        return { isBot: true, reason: 'no_languages', details: detectionResults };
+      }
+
+      // 5. Cek waktu minimum (terlalu cepat = bot)
+      const timeElapsed = Date.now() - pageLoadTime;
+      if (timeElapsed < 1500) {
+        detectionResults.timing = false;
+        console.warn("🚨 Bot terdeteksi: Klik terlalu cepat (" + timeElapsed + "ms).");
+        return { isBot: true, reason: 'too_fast', details: detectionResults };
+      }
+
+      // 6. Cek interaksi minimal (harus ada minimal 1 jenis interaksi)
+      const hasAnyInteraction = hasMouseMovement || hasKeyboardInteraction || 
+                                hasTouchInteraction || hasScrollInteraction;
+      if (!hasAnyInteraction) {
+        detectionResults.interaction = false;
+        console.warn("🚨 Bot terdeteksi: Tidak ada interaksi sama sekali.");
+        return { isBot: true, reason: 'no_interaction', details: detectionResults };
+      }
+
+      // 7. Deteksi headless browser
+      const headlessCheck = detectHeadlessBrowser();
+      detectionResults.headless = headlessCheck;
+      if (headlessCheck.isSuspicious) {
+        console.warn("🚨 Bot terdeteksi: Headless browser (score: " + headlessCheck.score + ")");
+        return { isBot: true, reason: 'headless_browser', details: detectionResults };
+      }
+
+      // 8. Analisis pola mouse (jika ada data cukup)
+      if (mouseMovements.length >= 3) {
+        const mouseAnalysis = analyzeMousePattern();
+        detectionResults.mousePattern = mouseAnalysis;
+        if (!mouseAnalysis.isHuman) {
+          console.warn("🚨 Bot terdeteksi: Pola mouse tidak natural - " + mouseAnalysis.reason);
+          return { isBot: true, reason: 'unnatural_mouse', details: detectionResults };
+        }
+      }
+
+      // 9. Cek konsistensi screen/browser
+      const screenCheck = checkScreenConsistency();
+      detectionResults.screenConsistency = screenCheck;
+      if (!screenCheck.isConsistent) {
+        console.warn("🚨 Bot terdeteksi: Inkonsistensi screen/browser - " + screenCheck.issues.join(', '));
+        return { isBot: true, reason: 'screen_inconsistency', details: detectionResults };
+      }
+
+      // 10. Canvas fingerprint (untuk deteksi headless)
+      const canvasFp = getCanvasFingerprint();
+      detectionResults.canvas = canvasFp !== 'error';
+      if (canvasFp === 'error') {
+        console.warn("⚠️ Warning: Canvas rendering error (mungkin headless)");
+      }
+
+      // Jika lolos semua pengecekan
+      console.log("✅ Verifikasi berhasil - User terlihat seperti manusia");
+      return { isBot: false, reason: 'passed', details: detectionResults };
+    }
+
+    // === EVENT LISTENER UNTUK BUTTON ===
+    button.addEventListener("click", function (event) {
+      const detection = isBot(event);
+      
+      if (detection.isBot) {
+        // Tampilkan pesan error
+        statusMessage.textContent = "⛔ Akses ditolak. Aktivitas mencurigakan terdeteksi.";
+        statusMessage.classList.add("show", "error");
+        
+        // Alihkan bot ke Google setelah 2 detik
+        setTimeout(() => {
+          window.location.href = "https://www.google.com"; 
+        }, 2000);
+        return;
+      }
+
+      // === JIKA LOLOS PENGECEKAN (MANUSIA ASLI) ===
       button.classList.add("loading");
       statusMessage.classList.add("show");
+      statusMessage.classList.remove("error");
+      statusMessage.textContent = "✅ Verifikasi berhasil. Mengarahkan Anda...";
 
-      // Waktu animasi sebelum berpindah halaman.
+      // Waktu animasi sebelum berpindah halaman
       setTimeout(function () {
         window.location.href = TUJUAN_URL;
       }, 1600);
     });
+
+    // === LOGGING UNTUK DEBUGGING (opsional, bisa dihapus di production) ===
+    window.addEventListener('load', function() {
+      console.log("🔒 Security Page Loaded");
+      console.log("📊 Detection ready - Mouse movements:", mouseMovements.length);
+      console.log("🎨 Canvas fingerprint:", getCanvasFingerprint());
+      console.log("🖥️ Screen consistency:", checkScreenConsistency());
+    });
+
+    // Log status setiap 5 detik (untuk monitoring)
+    setInterval(function() {
+      if (window.location.href.includes(window.location.origin)) {
+        console.log("📈 Status:", {
+          mouseMovements: mouseMovements.length,
+          keyPresses: keyPressTimes.length,
+          touchEvents: touchEvents.length,
+          hasInteraction: hasMouseMovement || hasKeyboardInteraction || hasTouchInteraction
+        });
+      }
+    }, 5000);
   </script>
 </body>
 </html>
